@@ -20,10 +20,8 @@ def get_env_value(path, key):
 				return line.split("=", 1)[1]
 	return None
 
-
 stripe_key = get_env_value(".env", "STRIPE_API_KEY")
 client = StripeClient(stripe_key)
-
 
 tz = ZoneInfo("Europe/Stockholm")
 
@@ -31,12 +29,24 @@ start = datetime(2026, 5, 1, 0, 0, tzinfo=tz)
 end = datetime(2026,6, 1, 0, 0, tzinfo=tz)
 
 
-def print_monthly_overview(monthly_statement):
-	print(f"Total sales in month:{monthly_statement["total_gross"]} \n")
-	print(f"Total discounts in month: {monthly_statement["total_discounts"]}\n")
-	print(f"Total refunds in month: {monthly_statement["total_refunds"]}\n")
+def print_monthly_overview(monthly_statement, monthly_fee_statement=None):
+	print("---------------------")
+	print(f"Total sales in month:{monthly_statement["total_gross"]}")
+	print(f"Total discounts in month: {monthly_statement["total_discounts"]}")
+	print(f"Total refunds in month: {monthly_statement["total_refunds"]}")
 	print("---------------------")
 	print(f"leaving a total of {monthly_statement["sales_after_refunds_and_discounts"]} in sales after refunds and discounts")
+	print("---------------------")
+	print(f"Total Tax in month: {monthly_statement["total_taxes"]}")
+	print(f"At a ratio of {(monthly_statement["total_taxes"] / monthly_statement["sales_after_refunds_and_discounts"])* 100 } %")
+	print("---------------------")
+
+	if monthly_fee_statement:
+		print(f"Stripe fees this month:")
+		for product, amount in monthly_fee_statement.items():
+			print(f"{product}: {amount}")
+
+		print(f"total fees: {monthly_fee_statement["totals"]}")
 
 
 
@@ -58,7 +68,7 @@ def fetch_monhtly_statement(start, end, key):
 			"limit": 100, 
 			"created": {
 				"gte": int(start.timestamp()), 
-				"lte": int(end.timestamp()),
+				"lt": int(end.timestamp()),
 			}, 
 		}).auto_paging_iter() 
 	)
@@ -75,13 +85,13 @@ def fetch_monhtly_statement(start, end, key):
 		tax_list = getattr(invoice, 'total_taxes', []) or []
 		tax_sum = sum(t.amount for t in tax_list)
 
-		date = getattr(invoice, 'status_transitions')["paid_at"]
+		# date = getattr(invoice, 'status_transitions')["paid_at"]
 
 		monthly_statement["all_invoices"].append({
 			"id": invoice.id, 
-			"date": date, #unix-format
+			"date": invoice.created, #unix-format
 			"status": invoice.status,
-			"gross_amount": invoice.total,
+			"gross_amount": invoice.total, #discounts redan bortdragna
 			"discount_amount": discount_sum, 
 			"tax": tax_sum
 			})
@@ -104,7 +114,7 @@ def fetch_monhtly_statement(start, end, key):
 			"limit": 100,
 			"created": {
 				"gte": int(start.timestamp()),
-				"lte": int(end.timestamp()),
+				"lt": int(end.timestamp()),
 			},
 		}).auto_paging_iter()
 	)
@@ -118,9 +128,8 @@ def fetch_monhtly_statement(start, end, key):
 
 		monthly_statement["total_refunds"] += refund.amount
 
-
 	# Calculate sales after refunds and discounts
-	monthly_statement["sales_after_refunds_and_discounts"] = monthly_statement["total_gross"] - monthly_statement["total_discounts"] - monthly_statement["total_refunds"]
+	monthly_statement["sales_after_refunds_and_discounts"] = monthly_statement["total_gross"] - monthly_statement["total_refunds"]
 
 	return monthly_statement
 
@@ -130,8 +139,19 @@ def fetch_monhtly_statement(start, end, key):
 # print_monthly_overview(monthly_statement)
 
 
-def fetch_stripe_monthly_fees(start, end, key):
+def check_vat(monthly_statement):
+ if 5 * monthly_statement["total_taxes"] == monthly_statement["sales_after_refunds_and_discounts"]:
+ 	print("tax is correct at 20%")
+ else:
+ 	tax_ratio = monthly_statement["total_taxes"] / monthly_statement["sales_after_refunds_and_discounts"]
+ 	print(f"Current tax ratio is {tax_ratio}, total tax: {monthly_statement["total_taxes"]} of sales (af r & d) {monthly_statement["sales_after_refunds_and_discounts"]}")
+ 	updated_tax = monthly_statement["sales_after_refunds_and_discounts"] / 5
+ 	print(f"Updated tax: {monthly_statement["total_taxes"]} -> {updated_tax}")
+ 	print(f"Now at a ration of {updated_tax / monthly_statement["sales_after_refunds_and_discounts"]}")
+ 	monthly_statement["total_taxes"] = updated_tax
 
+
+def fetch_stripe_monthly_fees(start, end, key):
 	report_run = client.v1.reporting.report_runs.create({
 		"report_type": "all_fees.balance_transaction_created.summary.2",
 		"parameters": {
@@ -151,7 +171,6 @@ def fetch_stripe_monthly_fees(start, end, key):
 
 	report_url = report_run.result.url
 
-
 	resp = requests.get(report_url, auth=(stripe_key, ""))
 	resp.raise_for_status() #raises http error
 
@@ -159,31 +178,24 @@ def fetch_stripe_monthly_fees(start, end, key):
 	reader = csv.DictReader(io.StringIO(resp.text))
 	rows = list(reader)
 
-
-	# with open(report_run.result.filename, "wb") as f: 
-	# 	f.write(resp.content)
-
-	# print(f"Saved {report_run.result.filename} ({len(resp.content)} bytes)"
-
 	monthly_fee_statement = defaultdict(int)
-
 
 	for row in rows:
 		monthly_fee_statement[row["product"]] += int(Decimal(row["amount"]) * 100)
-
 		monthly_fee_statement["totals"] += int(Decimal(row["amount"]) * 100) # ska sedan avrundas till jämt 50 öre
 
-	print(dict(monthly_fee_statement)) 
+	return monthly_fee_statement
 
-# def readstripe_fee_report(): 
 
 ### kör programmet:
 
-# may = fetch_monhtly_statement(start, end, stripe_key)
-# print_monthly_overview(may)
+may = fetch_monhtly_statement(start, end, stripe_key)
+may_fees = fetch_stripe_monthly_fees(start, end, stripe_key)
 
-fetch_stripe_monthly_fees(start, end, stripe_key)
+check_vat(may)
+print_monthly_overview(may, may_fees)
 
+# generate verifications
 
 
 # export monthly statements to pdf
