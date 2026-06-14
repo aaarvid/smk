@@ -1,9 +1,13 @@
 from stripe import StripeClient
 from datetime import datetime
+from zoneinfo import ZoneInfo
+from collections import defaultdict
+from decimal import Decimal
 import requests
 import time
-from collections import defaultdict
-from zoneinfo import ZoneInfo
+import csv
+import io
+
 
 
 def get_env_value(path, key):
@@ -23,11 +27,8 @@ client = StripeClient(stripe_key)
 
 tz = ZoneInfo("Europe/Stockholm")
 
-start = datetime(2026, 5, 1)
-end = datetime(2026,6, 1)
-
-start_tz = datetime(2026, 5, 1, tzinfo=tz)
-end_tz = datetime(2026,6, 1, tzinfo=tz)
+start = datetime(2026, 5, 1, 0, 0, tzinfo=tz)
+end = datetime(2026,6, 1, 0, 0, tzinfo=tz)
 
 
 def print_monthly_overview(monthly_statement):
@@ -129,7 +130,7 @@ def fetch_monhtly_statement(start, end, key):
 # print_monthly_overview(monthly_statement)
 
 
-def download_stripe_fee_report(start, end, key):
+def fetch_stripe_monthly_fees(start, end, key):
 
 	report_run = client.v1.reporting.report_runs.create({
 		"report_type": "all_fees.balance_transaction_created.summary.2",
@@ -152,24 +153,41 @@ def download_stripe_fee_report(start, end, key):
 
 
 	resp = requests.get(report_url, auth=(stripe_key, ""))
-	resp.raise_for_status() #gör vad?
+	resp.raise_for_status() #raises http error
 
-	with open(report_run.result.filename, "wb") as f: 
-		f.write(resp.content)
 
-	print(f"Saved {report_run.result.filename} ({len(resp.content)} bytes)")
+	reader = csv.DictReader(io.StringIO(resp.text))
+	rows = list(reader)
 
+
+	# with open(report_run.result.filename, "wb") as f: 
+	# 	f.write(resp.content)
+
+	# print(f"Saved {report_run.result.filename} ({len(resp.content)} bytes)"
+
+	monthly_fee_statement = defaultdict(int)
+
+
+	for row in rows:
+		monthly_fee_statement[row["product"]] += int(Decimal(row["amount"]) * 100)
+
+		monthly_fee_statement["totals"] += int(Decimal(row["amount"]) * 100) # ska sedan avrundas till jämt 50 öre
+
+	print(dict(monthly_fee_statement)) 
 
 # def readstripe_fee_report(): 
 
-may = fetch_monhtly_statement(start, end, stripe_key)
-print_monthly_overview(may)
+### kör programmet:
+
+# may = fetch_monhtly_statement(start, end, stripe_key)
+# print_monthly_overview(may)
+
+fetch_stripe_monthly_fees(start, end, stripe_key)
 
 
-# print(report_run)
 
 # export monthly statements to pdf
-
+# export stripe fees as pdf
 
 
 
