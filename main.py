@@ -46,18 +46,19 @@ def print_monthly_overview(monthly_statement, monthly_fee_statement=None):
 		for product, amount in monthly_fee_statement.items():
 			print(f"{product}: {amount}")
 
-		print(f"total fees: {monthly_fee_statement["totals"]}")
+		print(f"total fees: {monthly_fee_statement["total_fees"]}")
 
 
 
 def fetch_monhtly_statement(start, end, key):
 
 	monthly_statement = {
-		"sales_after_refunds_and_discounts": 0,
 	    "total_gross": 0,
 	    "total_taxes": 0,
 	    "total_discounts": 0,
 	    "total_refunds": 0,
+		"sales_after_refunds_and_discounts": 0,
+		"amount_to_deposit": 0,
 	    "all_invoices": [], 
 	    "all_refunds": [],
 	}
@@ -104,7 +105,7 @@ def fetch_monhtly_statement(start, end, key):
 	# chceck paid invoices only
 	for invoice in monthly_statement["all_invoices"]: 
 		if invoice["status"] != "paid": 
-			print(f"Obs! not all invoices listed have status paid")
+			print(f"Obs! Not all invoices listed have status paid: investigate")
 			print(invoice)
 
 
@@ -140,15 +141,15 @@ def fetch_monhtly_statement(start, end, key):
 
 
 def check_vat(monthly_statement):
- if 5 * monthly_statement["total_taxes"] == monthly_statement["sales_after_refunds_and_discounts"]:
- 	print("tax is correct at 20%")
- else:
- 	tax_ratio = monthly_statement["total_taxes"] / monthly_statement["sales_after_refunds_and_discounts"]
- 	print(f"Current tax ratio is {tax_ratio}, total tax: {monthly_statement["total_taxes"]} of sales (af r & d) {monthly_statement["sales_after_refunds_and_discounts"]}")
- 	updated_tax = monthly_statement["sales_after_refunds_and_discounts"] / 5
- 	print(f"Updated tax: {monthly_statement["total_taxes"]} -> {updated_tax}")
- 	print(f"Now at a ration of {updated_tax / monthly_statement["sales_after_refunds_and_discounts"]}")
- 	monthly_statement["total_taxes"] = updated_tax
+	if 5 * monthly_statement["total_taxes"] == monthly_statement["sales_after_refunds_and_discounts"]:
+		print("tax is correct at 20%")
+	else:
+		tax_ratio = monthly_statement["total_taxes"] / monthly_statement["sales_after_refunds_and_discounts"]
+		print(f"Current tax ratio is {tax_ratio}, total tax: {monthly_statement["total_taxes"]} of sales (af r & d) {monthly_statement["sales_after_refunds_and_discounts"]}")
+		updated_tax = monthly_statement["sales_after_refunds_and_discounts"] / 5
+		print(f"Updated tax: {monthly_statement["total_taxes"]} -> {updated_tax}")
+		print(f"Now at a ration of {updated_tax / monthly_statement["sales_after_refunds_and_discounts"]}")
+		monthly_statement["total_taxes"] = updated_tax
 
 
 def fetch_stripe_monthly_fees(start, end, key):
@@ -182,9 +183,14 @@ def fetch_stripe_monthly_fees(start, end, key):
 
 	for row in rows:
 		monthly_fee_statement[row["product"]] += int(Decimal(row["amount"]) * 100)
-		monthly_fee_statement["totals"] += int(Decimal(row["amount"]) * 100) # ska sedan avrundas till jämt 50 öre
+		monthly_fee_statement["total_fees"] += int(Decimal(row["amount"]) * 100) # ska sedan avrundas till jämt 50 öre
 
 	return monthly_fee_statement
+
+
+# Calculate what to deposit from Stripe to company account
+def to_deposit(monthly_statement, monthly_fee_statement):
+	return monthly_statement["sales_after_refunds_and_discounts"] - monthly_fee_statement["total_fees"]
 
 
 ### kör programmet:
@@ -194,6 +200,8 @@ may_fees = fetch_stripe_monthly_fees(start, end, stripe_key)
 
 check_vat(may)
 print_monthly_overview(may, may_fees)
+
+print(f"to deposit to account: {to_deposit(may, may_fees)}") #just need to round the öre
 
 # generate verifications
 
