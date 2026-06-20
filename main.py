@@ -28,16 +28,29 @@ tz = ZoneInfo("Europe/Stockholm")
 start = datetime(2026, 5, 1, 0, 0, tzinfo=tz)
 end = datetime(2026,6, 1, 0, 0, tzinfo=tz)
 
+def to_printable_sek(ore: int) -> str: 
+	# in 1074250
+	#ut: 10 742, 50
+	ore_str = str(ore)
 
-def print_monthly_overview(monthly_statement, monthly_fee_statement=None):
+	# lägga in mellanrum för tusental
+	sek_str = ore_str[0:(len(ore_str)-2)] + "." + ore_str[(len(ore_str)-2):len(ore_str)] + " " + "SEK"
+
+	## runda till närmaste 50 öre
+
+	return sek_str
+
+
+#Displaying
+def print_monthly_overview(monthly_statement, monthly_fee_statement=None, to_deposit=None):
 	print("---------------------")
-	print(f"Total sales in month:{monthly_statement["total_gross"]}")
-	print(f"Total discounts in month: {monthly_statement["total_discounts"]}")
-	print(f"Total refunds in month: {monthly_statement["total_refunds"]}")
+	print(f"Total sales in month:{to_printable_sek(monthly_statement["total_gross"])}")
+	print(f"Total discounts in month: {to_printable_sek(monthly_statement["total_discounts"])}")
+	print(f"Total refunds in month: {to_printable_sek(monthly_statement["total_refunds"])}")
 	print("---------------------")
-	print(f"leaving a total of {monthly_statement["sales_after_refunds_and_discounts"]} in sales after refunds and discounts")
+	print(f"leaving a total of {to_printable_sek(monthly_statement["sales_after_refunds_and_discounts"])} in sales after refunds and discounts")
 	print("---------------------")
-	print(f"Total Tax in month: {monthly_statement["total_taxes"]}")
+	print(f"Total Tax in month: {to_printable_sek(monthly_statement["total_taxes"])}")
 	print(f"At a ratio of {(monthly_statement["total_taxes"] / monthly_statement["sales_after_refunds_and_discounts"])* 100 } %")
 	print("---------------------")
 
@@ -47,6 +60,9 @@ def print_monthly_overview(monthly_statement, monthly_fee_statement=None):
 			print(f"{product}: {amount}")
 
 		print(f"total fees: {monthly_fee_statement["total_fees"]}")
+
+	if to_deposit:
+		print(f"To deposit to company account: {to_deposit}")
 
 
 
@@ -129,15 +145,12 @@ def fetch_monhtly_statement(start, end, key):
 
 		monthly_statement["total_refunds"] += refund.amount
 
-	# Calculate sales after refunds and discounts
+	# Calculate sales after refunds and discounts (total_gross is already without discounts)
 	monthly_statement["sales_after_refunds_and_discounts"] = monthly_statement["total_gross"] - monthly_statement["total_refunds"]
 
 	return monthly_statement
 
 	#Check and correct VAT
-
-#Displaying
-# print_monthly_overview(monthly_statement)
 
 
 def check_vat(monthly_statement):
@@ -195,16 +208,23 @@ def to_deposit(monthly_statement, monthly_fee_statement):
 
 ### kör programmet:
 
-may = fetch_monhtly_statement(start, end, stripe_key)
+try: 
+	may = fetch_monhtly_statement(start, end, stripe_key)	
+except Exception as e: 
+	print(f"Error fetching monthly statement, {e}")
+
 may_fees = fetch_stripe_monthly_fees(start, end, stripe_key)
 
 check_vat(may)
-print_monthly_overview(may, may_fees)
 
-print(f"to deposit to account: {to_deposit(may, may_fees)}") #just need to round the öre
+may_deposit = to_deposit(may, may_fees)
+
+print_monthly_overview(may, may_fees, may_deposit)
+
+
+
 
 # generate verifications
-
 
 # export monthly statements to pdf
 # export stripe fees as pdf
