@@ -8,6 +8,8 @@ import time
 import csv
 import io
 
+from reportlab.pdfgen import canvas 
+from reportlab.lib.pagesizes import A4
 
 
 def get_env_value(path, key):
@@ -31,22 +33,31 @@ end = datetime(2026,6, 1, 0, 0, tzinfo=tz)
 def to_printable_sek(ore: int) -> str: 
 	# in 1074250
 	#ut: 10 742, 50
-	ore_str = str(ore)
 
-	# lägga in mellanrum för tusental
-	sek_str = ore_str[0:(len(ore_str)-2)] + "." + ore_str[(len(ore_str)-2):len(ore_str)] + " " + "SEK"
+	#runda nedåt till 0 eller 50 öre
+	ore = (ore // 50) * 50
+
+	kr, rest = divmod(int(ore), 100)
+
+	# The :02d pads rest to two digits, so 5 öre shows as 05 not 5.
+	return f"{kr}:{rest:02d} SEK"
+
+	# ore_str = str(ore)
+	# sek_str = ore_str[0:(len(ore_str)-2)] + "." + ore_str[(len(ore_str)-2):len(ore_str)] + " " + "SEK"
 
 	## runda till närmaste 50 öre
 
-	return sek_str
+	# return sek_str
 
 
 #Displaying
 def print_monthly_overview(monthly_statement, monthly_fee_statement=None, to_deposit=None):
 	print("---------------------")
+	print(f"{len(monthly_statement["all_invoices"])} of subscriptions sold")
+	print("---------------------")
 	print(f"Total sales in month:{to_printable_sek(monthly_statement["total_gross"])}")
 	print(f"Total discounts in month: {to_printable_sek(monthly_statement["total_discounts"])}")
-	print(f"Total refunds in month: {to_printable_sek(monthly_statement["total_refunds"])}")
+	print(f"A total of {len(monthly_statement["all_refunds"])} refunds where made in the preiod, summing up to: {to_printable_sek(monthly_statement["total_refunds"])}")
 	print("---------------------")
 	print(f"leaving a total of {to_printable_sek(monthly_statement["sales_after_refunds_and_discounts"])} in sales after refunds and discounts")
 	print("---------------------")
@@ -57,12 +68,12 @@ def print_monthly_overview(monthly_statement, monthly_fee_statement=None, to_dep
 	if monthly_fee_statement:
 		print(f"Stripe fees this month:")
 		for product, amount in monthly_fee_statement.items():
-			print(f"{product}: {amount}")
+			print(f"{product}: {to_printable_sek(amount)}")
 
-		print(f"total fees: {monthly_fee_statement["total_fees"]}")
+		print(f"Total fees: {to_printable_sek(monthly_fee_statement["total_fees"])}")
 
 	if to_deposit:
-		print(f"To deposit to company account: {to_deposit}")
+		print(f"To deposit to company account: {to_printable_sek(to_deposit)}")
 
 
 
@@ -208,19 +219,23 @@ def to_deposit(monthly_statement, monthly_fee_statement):
 
 ### kör programmet:
 
-try: 
-	may = fetch_monhtly_statement(start, end, stripe_key)	
-except Exception as e: 
-	print(f"Error fetching monthly statement, {e}")
+# try: 
+# 	may = fetch_monhtly_statement(start, end, stripe_key)	
+# except Exception as e: 
+# 	print(f"Error fetching monthly statement, {e}")
 
-may_fees = fetch_stripe_monthly_fees(start, end, stripe_key)
+# may_fees = fetch_stripe_monthly_fees(start, end, stripe_key)
 
-check_vat(may)
+# check_vat(may)
 
-may_deposit = to_deposit(may, may_fees)
+# may_deposit = to_deposit(may, may_fees)
 
-print_monthly_overview(may, may_fees, may_deposit)
+# print_monthly_overview(may, may_fees, may_deposit)
 
+
+c = canvas.Canvas("output.pdf", pagesize=A4)
+c.drawString(100, 800, "Hello world")
+c.save()
 
 
 
