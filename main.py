@@ -1,5 +1,6 @@
 from stripe import StripeClient
 from datetime import datetime
+from datetime import timedelta
 from zoneinfo import ZoneInfo
 from collections import defaultdict
 from decimal import Decimal
@@ -8,9 +9,13 @@ import time
 import csv
 import io
 
-from reportlab.pdfgen import canvas 
-from reportlab.lib.pagesizes import A4
-
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib import colors
+from reportlab.lib.units import mm
+from reportlab.platypus import (
+    SimpleDocTemplate, LongTable, TableStyle, Paragraph, Spacer
+)
+from reportlab.lib.styles import getSampleStyleSheet
 
 def get_env_value(path, key):
 	with open(path) as f:
@@ -27,8 +32,6 @@ client = StripeClient(stripe_key)
 
 tz = ZoneInfo("Europe/Stockholm")
 
-start = datetime(2026, 5, 1, 0, 0, tzinfo=tz)
-end = datetime(2026,6, 1, 0, 0, tzinfo=tz)
 
 def to_printable_sek(ore: int) -> str: 
 	# in 1074250
@@ -217,32 +220,183 @@ def to_deposit(monthly_statement, monthly_fee_statement):
 	return monthly_statement["sales_after_refunds_and_discounts"] - monthly_fee_statement["total_fees"]
 
 
+
+# Stuff for generating pdfs
+
+# Stuff for generating pdfs
+def _page_footer(canvas, doc):
+    canvas.saveState()
+    canvas.setFont("Helvetica", 8)
+    w, _ = landscape(A4)
+    canvas.drawRightString(w - 10 * mm, 6 * mm, f"Sida {doc.page}")
+    canvas.restoreState()
+
+
+_styles = getSampleStyleSheet()
+_cell = _styles["BodyText"]
+_cell.fontSize = 6
+_cell.leading = 7
+
+
+def _make_table(headers, rows, col_widths=None):
+    head = [Paragraph(f'<font color="white"><b>{h}</b></font>', _cell) for h in headers]
+    body = [[Paragraph(str(c), _cell) for c in r] for r in rows]
+    t = LongTable([head] + body, colWidths=col_widths, repeatRows=1)
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0048a3")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1),
+         [colors.white, colors.HexColor("#f2f2f2")]),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+        ("TOPPADDING", (0, 0), (-1, -1), 1),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+    ]))
+    return t
+
+
+def build_statement(path, title, statement):
+    doc = SimpleDocTemplate(
+        path,
+        pagesize=landscape(A4),
+        leftMargin=10 * mm, rightMargin=10 * mm,
+        topMargin=12 * mm, bottomMargin=14 * mm,
+    )
+
+    styles = getSampleStyleSheet()
+    cell = styles["BodyText"]
+    cell.fontSize = 6
+    cell.leading = 7
+
+
+    # --- Summary block ---
+    summary_rows = [
+        ["Totalt brutto", to_printable_sek(statement["total_gross"])],
+        ["Total moms", to_printable_sek(statement["total_taxes"])],
+        ["Totala rabatter", to_printable_sek(statement["total_discounts"])],
+        ["Total återbetalningar", to_printable_sek(statement["total_refunds"])],
+        ["Försäljning efter återbetalningar och rabatter",
+         to_printable_sek(statement["sales_after_refunds_and_discounts"])],
+    ]
+    summary = LongTable(
+        [[Paragraph(f"<b>{k}</b>", cell), Paragraph(v, cell)]
+         for k, v in summary_rows],
+        colWidths=[70 * mm, 30 * mm],
+    )
+    summary.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+        ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f2f2f2")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]))
+
+    # --- Invoice rows: match the keys produced by fetch_monhtly_statement ---
+    inv_headers = ["Id", "Datum", "Status", "Brutto", "Rabatt", "Moms"]
+    inv_rows = [[
+        inv.get("id", ""),
+        datetime.fromtimestamp(inv.get("date", 0), tz).strftime("%Y-%m-%d %H:%M"),
+        inv.get("status", ""),
+        to_printable_sek(inv.get("gross_amount", 0)),
+        to_printable_sek(inv.get("discount_amount", 0)),
+        to_printable_sek(inv.get("tax", 0)),
+    ] for inv in statement["all_invoices"]]
+
+    ref_headers = ["Återbetalnings-ID", "Datum", "Summa"]
+    ref_rows = [[
+        r.get("refund_id", ""),
+        datetime.fromtimestamp(r.get("refund_date", 0), tz).strftime("%Y-%m-%d %H:%M"),
+        to_printable_sek(r.get("refund_amount", 0)),
+    ] for r in statement["all_refunds"]]
+
+    h1 = styles["Heading2"]
+    elements = [
+        Paragraph(title, styles["Title"]),
+        Spacer(1, 4 * mm),
+        summary,
+        Spacer(1, 6 * mm),
+        Paragraph("Fakturor", h1),
+        _make_table(inv_headers, inv_rows),
+    ]
+    if ref_rows:
+        elements += [
+            Spacer(1, 6 * mm),
+            Paragraph("Återbetalningar", h1),
+            _make_table(ref_headers, ref_rows),
+        ]
+
+    doc.build(elements, onFirstPage=_page_footer, onLaterPages=_page_footer)
+
+
+def build_fee_statement(path, title, fee_statement):
+    doc = SimpleDocTemplate(
+        path,
+        pagesize=landscape(A4),
+        leftMargin=10 * mm, rightMargin=10 * mm,
+        topMargin=12 * mm, bottomMargin=14 * mm,
+    )
+
+    # Per-product rows, excluding the total; sorted biggest first
+    fee_headers = ["Produkt", "Avgift"]
+    fee_rows = [
+        [product, to_printable_sek(amount)]
+        for product, amount in sorted(
+            fee_statement.items(),
+            key=lambda kv: kv[1],
+            reverse=True,
+        )
+        if product != "total_fees"
+    ]
+    fee_rows.append(["Totala avgifter", to_printable_sek(fee_statement["total_fees"])])
+
+    elements = [
+        Paragraph(title, _styles["Title"]),
+        Spacer(1, 4 * mm),
+        _make_table(fee_headers, fee_rows, col_widths=[120 * mm, 40 * mm]),
+    ]
+    doc.build(elements, onFirstPage=_page_footer, onLaterPages=_page_footer)
+
 ### kör programmet:
 
-# try: 
-# 	may = fetch_monhtly_statement(start, end, stripe_key)	
-# except Exception as e: 
-# 	print(f"Error fetching monthly statement, {e}")
+start = datetime(2026, 5, 1, 0, 0, tzinfo=tz)
+end = datetime(2026,6, 1, 0, 0, tzinfo=tz)
 
-# may_fees = fetch_stripe_monthly_fees(start, end, stripe_key)
+#2026-05-01 00:00:00+02:00
 
-# check_vat(may)
+try: 
+	may = fetch_monhtly_statement(start, end, stripe_key)	
+except Exception as e: 
+	print(f"Error fetching monthly statement, {e}")
 
-# may_deposit = to_deposit(may, may_fees)
+may_fees = fetch_stripe_monthly_fees(start, end, stripe_key)
 
-# print_monthly_overview(may, may_fees, may_deposit)
+check_vat(may)
 
+may_deposit = to_deposit(may, may_fees)
 
-c = canvas.Canvas("output.pdf", pagesize=A4)
-c.drawString(100, 800, "Hello world")
-c.save()
-
+print_monthly_overview(may, may_fees, may_deposit)
 
 
-# generate verifications
 
-# export monthly statements to pdf
+### generate verifications
+
+statement_filename=f"SMK_{start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}_sammanställning.pdf"
+statement_title=f"Svenska Mjukvarukontoret Försäljningssammanställning {start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}"
+
+
+build_statement(statement_filename, statement_title, may)
+print("PDF written with monthly statement")
+
+fee_filename=f"SMK_{start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}_stripeavgifter.pdf"
+fee_title=f"Svenska Mjukvarukontoret Stripe-avgifter {start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}"
+
+build_fee_statement(fee_filename, fee_title, may_fees)
+print("PDF written with stripe fees")
+
+
 # export stripe fees as pdf
-
-
 
