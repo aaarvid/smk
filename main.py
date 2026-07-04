@@ -63,6 +63,9 @@ def print_monthly_overview(monthly_statement, monthly_fee_statement=None, to_dep
 	print(f"Total discounts in month: {to_printable_sek(monthly_statement["total_discounts"])}")
 	print(f"A total of {len(monthly_statement["all_refunds"])} refunds where made in the preiod, summing up to: {to_printable_sek(monthly_statement["total_refunds"])}")
 	print("---------------------")
+	print(f"There are {len(monthly_statement["unpaid_invoices"])} of unpaid invoices during the period")
+	print("These are exempt from sums and calculations")
+	print("---------------------")
 	print(f"leaving a total of {to_printable_sek(monthly_statement["sales_after_refunds_and_discounts"])} in sales after refunds and discounts")
 	print("---------------------")
 	print(f"Total Tax in month: {to_printable_sek(monthly_statement["total_taxes"])}")
@@ -70,14 +73,17 @@ def print_monthly_overview(monthly_statement, monthly_fee_statement=None, to_dep
 	print("---------------------")
 
 	if monthly_fee_statement:
+		print("---------------------")
 		print(f"Stripe fees this month:")
 		for product, amount in monthly_fee_statement.items():
 			print(f"{product}: {to_printable_sek(amount)}")
 
 		print(f"Total fees: {to_printable_sek(monthly_fee_statement["total_fees"])}")
-
+		print("---------------------")
 	if to_deposit:
+		print("---------------------")
 		print(f"To deposit to company account: {to_printable_sek(to_deposit)}")
+		print("---------------------")
 
 
 
@@ -92,6 +98,7 @@ def fetch_monhtly_statement(start, end, key):
 		"amount_to_deposit": 0,
 		"all_invoices": [], 
 		"all_refunds": [],
+		"unpaid_invoices": [],
 	}
 
 
@@ -110,14 +117,27 @@ def fetch_monhtly_statement(start, end, key):
 	#Fetch invoices
 	for invoice in raw_invoice_data: 
 
+		if invoice.status != "paid":
+			print(f"Obs! Not all invoices whithin period have status paid. Skipping.")
+			print(f"ID:{invoice.id}, date: {invoice.created}, amount:{invoice.total}")
+
+			monthly_statement["unpaid_invoices"].append({
+				"id": invoice.id, 
+				"date": invoice.created, #unix-format
+				"status": invoice.status,
+				"gross_amount": invoice.total, #discounts redan bortdragna
+				"discount_amount": discount_sum, 
+				"tax": tax_sum
+				})
+			# print(f"ID:{invoice["id"]} -> Status: {invoice["status"]}, Date: {invoice["date"]}")
+			continue
+
 		discount_list = getattr(invoice, 'total_discount_amounts', []) or []
 		discount_sum = sum(d.amount for d in discount_list)
 
 
 		tax_list = getattr(invoice, 'total_taxes', []) or []
 		tax_sum = sum(t.amount for t in tax_list)
-
-		# date = getattr(invoice, 'status_transitions')["paid_at"]
 
 		monthly_statement["all_invoices"].append({
 			"id": invoice.id, 
@@ -134,11 +154,18 @@ def fetch_monhtly_statement(start, end, key):
 
 
 	# chceck paid invoices only
-	for invoice in monthly_statement["all_invoices"]: 
-		if invoice["status"] != "paid": 
-			print(f"Obs! Not all invoices listed have status paid: investigate")
-			print(invoice)
 
+	# unpaid_inv_sum = 0
+
+	# for invoice in monthly_statement["all_invoices"]: 
+	# 	if invoice["status"] != "paid": 
+	# 		print(f"Obs! Not all invoices listed have status paid: investigate")
+	# 		print(f"ID:{invoice["id"]} -> Status: {invoice["status"]}, Date: {invoice["date"]}")
+	# 		unpaid_inv_sum += invoice["gross_amount"]
+
+	# print(f"Total unpaid invoices amount to {to_printable_sek(unpaid_inv_sum)}")
+
+# MÅSTE dra bort ej betalade fakturor från summan, och räkna skatt därefter
 
 	#Fetch refunds
 	raw_refund_data = list(
@@ -170,9 +197,11 @@ def fetch_monhtly_statement(start, end, key):
 
 def check_vat(monthly_statement):
 	if 5 * monthly_statement["total_taxes"] == monthly_statement["sales_after_refunds_and_discounts"]:
+		print("---------------------")
 		print("tax is correct at 20%")
 	else:
 		tax_ratio = monthly_statement["total_taxes"] / monthly_statement["sales_after_refunds_and_discounts"]
+		print("---------------------")
 		print(f"Current tax ratio is {tax_ratio}, total tax: {monthly_statement["total_taxes"]} of sales (af r & d) {monthly_statement["sales_after_refunds_and_discounts"]}")
 		updated_tax = monthly_statement["sales_after_refunds_and_discounts"] / 5
 		print(f"Updated tax: {monthly_statement["total_taxes"]} -> {updated_tax}")
@@ -366,7 +395,7 @@ def build_fee_statement(path, title, fee_statement):
 
 
 def main(): 
-	if len(sys.argv) < 2: 
+	if len(sys.argv) < 3: 
 		print("kör programmet med Python3 main.py yyyy-mm-dd yyyy-mm-dd")
 		print("Startdatum är inklusivt, slutdatum exklusivt, sätt sluttdatum till ex.vis 1 juni för att få med hela maj månad")
 		sys.exit(1)
@@ -374,43 +403,57 @@ def main():
 	# start = datetime(2026, 5, 1, 0, 0, tzinfo=tz)
 	# end = datetime(2026,6, 1, 0, 0, tzinfo=tz)
 	#2026-05-01 00:00:00+02:00
-
-	start = datetime.strptime(sys.argv[1].lstrip("-"), "%Y-%m-%d").replace(tzinfo=tz)
-	end = datetime.strptime(sys.argv[2].lstrip("-"), "%Y-%m-%d").replace(tzinfo=tz)
+	try:
+		start = datetime.strptime(sys.argv[1].lstrip("-"), "%Y-%m-%d").replace(tzinfo=tz)
+	except Exception as e: 
+		print(f"Fel format i startdatum. Ska vara yyyy-mm-dd. Var: {sys.argv[1]}")
+		sys.exit(1)
+	try:
+		end = datetime.strptime(sys.argv[2].lstrip("-"), "%Y-%m-%d").replace(tzinfo=tz)
+	except Exception as e: 
+		print(f"Fel format i startdatum. Ska vara yyyy-mm-dd. Var: {sys.argv[2]}")
+		sys.exit(1)
 
 	print(f"Start: {start}")
 	print(f"End: {end}")
 
 
 	try:
-		may = fetch_monhtly_statement(start, end, stripe_key)	
+		monthly_statement = fetch_monhtly_statement(start, end, stripe_key)	
 	except Exception as e: 
 		print(f"Error fetching monthly statement, {e}")
 
-	may_fees = fetch_stripe_monthly_fees(start, end, stripe_key)
+	monthly_fees = fetch_stripe_monthly_fees(start, end, stripe_key)
 
-	check_vat(may)
+	check_vat(monthly_statement)
 
-	may_deposit = to_deposit(may, may_fees)
+	may_deposit = to_deposit(monthly_statement, monthly_fees)
 
-	print_monthly_overview(may, may_fees, may_deposit)
+	print_monthly_overview(monthly_statement, monthly_fees, may_deposit)
 
 
 
 	### generate verifications
 
-	statement_filename=f"SMK_{start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}_sammanställning.pdf"
-	statement_title=f"Svenska Mjukvarukontoret Försäljningssammanställning {start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}"
+	print(f"Generate pdf verifications? (y/n)")
+	should_generate = input().lower()
+
+	if should_generate == "y":
+
+		statement_filename=f"SMK_{start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}_sammanställning.pdf"
+		statement_title=f"Svenska Mjukvarukontoret Försäljningssammanställning {start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}"
 
 
-	build_statement(statement_filename, statement_title, may)
-	print("PDF written with monthly statement")
+		build_statement(statement_filename, statement_title, monthly_statement)
+		print("PDF written with monthly statement")
 
-	fee_filename=f"SMK_{start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}_stripeavgifter.pdf"
-	fee_title=f"Svenska Mjukvarukontoret Stripe-avgifter {start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}"
+		fee_filename=f"SMK_{start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}_stripeavgifter.pdf"
+		fee_title=f"Svenska Mjukvarukontoret Stripe-avgifter {start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}"
 
-	build_fee_statement(fee_filename, fee_title, may_fees)
-	print("PDF written with stripe fees")
+		build_fee_statement(fee_filename, fee_title, monthly_fees)
+		print("PDF written with stripe fees")
+	else: 
+		sys.exit(1)
 
 
 if __name__ == "__main__":
