@@ -122,11 +122,11 @@ def fetch_monhtly_statement(start, end, key):
 			print(f"ID:{invoice.id}, date: {invoice.created}, amount:{invoice.total}")
 
 			monthly_statement["unpaid_invoices"].append({
-				"id": invoice.id, 
+				"id": invoice.id,
 				"date": invoice.created, #unix-format
 				"status": invoice.status,
 				"gross_amount": invoice.total, #discounts redan bortdragna
-				"discount_amount": discount_sum, 
+				"discount_amount": discount_sum,
 				"tax": tax_sum
 				})
 			# print(f"ID:{invoice["id"]} -> Status: {invoice["status"]}, Date: {invoice["date"]}")
@@ -140,11 +140,11 @@ def fetch_monhtly_statement(start, end, key):
 		tax_sum = sum(t.amount for t in tax_list)
 
 		monthly_statement["all_invoices"].append({
-			"id": invoice.id, 
+			"id": invoice.id,
 			"date": invoice.created, #unix-format
 			"status": invoice.status,
 			"gross_amount": invoice.total, #discounts redan bortdragna
-			"discount_amount": discount_sum, 
+			"discount_amount": discount_sum,
 			"tax": tax_sum
 			})
 
@@ -395,7 +395,7 @@ def build_fee_statement(path, title, fee_statement):
 
 
 def main(): 
-	if len(sys.argv) < 3: 
+	if len(sys.argv) < 3:
 		print("kör programmet med Python3 main.py yyyy-mm-dd yyyy-mm-dd")
 		print("Startdatum är inklusivt, slutdatum exklusivt, sätt sluttdatum till ex.vis 1 juni för att få med hela maj månad")
 		sys.exit(1)
@@ -405,12 +405,12 @@ def main():
 	#2026-05-01 00:00:00+02:00
 	try:
 		start = datetime.strptime(sys.argv[1].lstrip("-"), "%Y-%m-%d").replace(tzinfo=tz)
-	except Exception as e: 
+	except Exception as e:
 		print(f"Fel format i startdatum. Ska vara yyyy-mm-dd. Var: {sys.argv[1]}")
 		sys.exit(1)
 	try:
 		end = datetime.strptime(sys.argv[2].lstrip("-"), "%Y-%m-%d").replace(tzinfo=tz)
-	except Exception as e: 
+	except Exception as e:
 		print(f"Fel format i startdatum. Ska vara yyyy-mm-dd. Var: {sys.argv[2]}")
 		sys.exit(1)
 
@@ -452,7 +452,7 @@ def main():
 
 		build_fee_statement(fee_filename, fee_title, monthly_fees)
 		print("PDF written with stripe fees")
-	else: 
+	else:
 		sys.exit(1)
 
 
