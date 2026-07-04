@@ -17,6 +17,7 @@ from reportlab.platypus import (
 	SimpleDocTemplate, LongTable, TableStyle, Paragraph, Spacer
 )
 from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.enums import TA_CENTER
 
 def get_env_value(path, key):
 	with open(path) as f:
@@ -272,7 +273,7 @@ def _make_table(headers, rows, col_widths=None):
 	return t
 
 
-def build_statement(path, title, statement):
+def build_statement(path, filename, date_str, statement):
 	doc = SimpleDocTemplate(
 		path,
 		pagesize=landscape(A4),
@@ -331,8 +332,12 @@ def build_statement(path, title, statement):
 	] for r in statement["all_refunds"]]
 
 	h1 = styles["Heading2"]
+	h3 = styles["Heading3"]
+	h3.alignment = TA_CENTER
 	elements = [
-		Paragraph(title, styles["Title"]),
+		Paragraph(filename, styles["Title"]),
+		Paragraph(date_str, h3),
+		Paragraph("Svenska Mjukvarukontoret", h3),
 		Spacer(1, 4 * mm),
 		summary,
 		Spacer(1, 6 * mm),
@@ -349,7 +354,7 @@ def build_statement(path, title, statement):
 	doc.build(elements, onFirstPage=_page_footer, onLaterPages=_page_footer)
 
 
-def build_fee_statement(path, title, fee_statement):
+def build_fee_statement(path, filename, date_str, fee_statement):
 	doc = SimpleDocTemplate(
 		path,
 		pagesize=landscape(A4),
@@ -370,8 +375,12 @@ def build_fee_statement(path, title, fee_statement):
 	]
 	fee_rows.append(["Totala avgifter", to_printable_sek(fee_statement["total_fees"])])
 
+	h3 = _styles["Heading3"]
+	h3.alignment = TA_CENTER
 	elements = [
-		Paragraph(title, _styles["Title"]),
+		Paragraph(filename, _styles["Title"]),
+		Paragraph(date_str, h3),
+		Paragraph("Svenska Mjukvarukontoret", h3),
 		Spacer(1, 4 * mm),
 		_make_table(fee_headers, fee_rows, col_widths=[120 * mm, 40 * mm]),
 	]
@@ -413,9 +422,9 @@ def main():
 
 	check_vat(monthly_statement)
 
-	may_deposit = to_deposit(monthly_statement, monthly_fees)
+	sum_to_deposit = to_deposit(monthly_statement, monthly_fees)
 
-	print_monthly_overview(monthly_statement, monthly_fees, may_deposit)
+	print_monthly_overview(monthly_statement, monthly_fees, sum_to_deposit)
 
 
 
@@ -426,17 +435,19 @@ def main():
 
 	if should_generate == "y":
 
-		statement_filename=f"SMK_{start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}_sammanställning.pdf"
-		statement_title=f"Svenska Mjukvarukontoret Försäljningssammanställning {start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}"
+		date_str=f"{start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}"
+
+		statement_filename = f"SMK_{date_str}_sammanställning.pdf"
+		statement_title =f"Månatlig försäljningssammanställning"
 
 
-		build_statement(statement_filename, statement_title, monthly_statement)
+		build_statement(statement_filename, statement_title, date_str, monthly_statement)
 		print("PDF written with monthly statement")
 
-		fee_filename=f"SMK_{start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}_stripeavgifter.pdf"
-		fee_title=f"Svenska Mjukvarukontoret Stripe-avgifter {start.strftime('%Y%m%d')}-{(end - timedelta(days=1)).strftime('%Y%m%d')}"
+		fee_filename=f"SMK_{date_str}_stripeavgifter.pdf"
+		fee_title=f"Månatlig sammanställning Stripe-avgifter"
 
-		build_fee_statement(fee_filename, fee_title, monthly_fees)
+		build_fee_statement(fee_filename, fee_title, date_str, monthly_fees)
 		print("PDF written with stripe fees")
 	else:
 		sys.exit(1)
