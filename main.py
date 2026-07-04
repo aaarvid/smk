@@ -68,8 +68,14 @@ def print_monthly_overview(monthly_statement, monthly_fee_statement=None, to_dep
 	print("---------------------")
 	print(f"leaving a total of {to_printable_sek(monthly_statement["sales_after_refunds_and_discounts"])} in sales after refunds and discounts")
 	print("---------------------")
-	print(f"Total Tax in month: {to_printable_sek(monthly_statement["total_taxes"])}")
-	print(f"At a ratio of {(monthly_statement["total_taxes"] / monthly_statement["sales_after_refunds_and_discounts"])* 100 } %")
+	if monthly_statement["total_corrected_taxes"] != 0:
+		print(f"Total Tax in month: {to_printable_sek(monthly_statement["total_corrected_taxes"])}")
+		print(f"At a ratio of {(monthly_statement["total_corrected_taxes"] / monthly_statement["sales_after_refunds_and_discounts"])* 100 } %")
+		print(f"This after a correction of {to_printable_sek(monthly_statement["tax_adjustment"])}")
+
+	else:
+		print(f"Total Tax in month: {to_printable_sek(monthly_statement["total_reported_taxes"])}")
+		print(f"At a ratio of {(monthly_statement["total_reported_taxes"] / monthly_statement["sales_after_refunds_and_discounts"])* 100 } %")
 	print("---------------------")
 
 	if monthly_fee_statement:
@@ -77,8 +83,6 @@ def print_monthly_overview(monthly_statement, monthly_fee_statement=None, to_dep
 		print(f"Stripe fees this month:")
 		for product, amount in monthly_fee_statement.items():
 			print(f"{product}: {to_printable_sek(amount)}")
-
-		print(f"Total fees: {to_printable_sek(monthly_fee_statement["total_fees"])}")
 		print("---------------------")
 	if to_deposit:
 		print("---------------------")
@@ -87,11 +91,13 @@ def print_monthly_overview(monthly_statement, monthly_fee_statement=None, to_dep
 
 
 
-def fetch_monhtly_statement(start, end, key):
+def fetch_monhtly_statement(start, end):
 
 	monthly_statement = {
 		"total_gross": 0,
-		"total_taxes": 0,
+		"total_reported_taxes": 0,
+		"total_corrected_taxes": 0,
+		"tax_adjustment": 0,
 		"total_discounts": 0,
 		"total_refunds": 0,
 		"sales_after_refunds_and_discounts": 0,
@@ -100,7 +106,6 @@ def fetch_monhtly_statement(start, end, key):
 		"all_refunds": [],
 		"unpaid_invoices": [],
 	}
-
 
 	raw_invoice_data = list(
 		client.v1.invoices.list({
@@ -112,10 +117,13 @@ def fetch_monhtly_statement(start, end, key):
 		}).auto_paging_iter() 
 	)
 
-
-
 	#Fetch invoices
 	for invoice in raw_invoice_data: 
+
+		discount_list = getattr(invoice, 'total_discount_amounts', []) or []
+		discount_sum = sum(d.amount for d in discount_list)
+		tax_list = getattr(invoice, 'total_taxes', []) or []
+		tax_sum = sum(t.amount for t in tax_list)
 
 		if invoice.status != "paid":
 			print(f"Obs! Not all invoices whithin period have status paid. Skipping.")
@@ -129,15 +137,9 @@ def fetch_monhtly_statement(start, end, key):
 				"discount_amount": discount_sum,
 				"tax": tax_sum
 				})
-			# print(f"ID:{invoice["id"]} -> Status: {invoice["status"]}, Date: {invoice["date"]}")
+
 			continue
 
-		discount_list = getattr(invoice, 'total_discount_amounts', []) or []
-		discount_sum = sum(d.amount for d in discount_list)
-
-
-		tax_list = getattr(invoice, 'total_taxes', []) or []
-		tax_sum = sum(t.amount for t in tax_list)
 
 		monthly_statement["all_invoices"].append({
 			"id": invoice.id,
@@ -149,23 +151,9 @@ def fetch_monhtly_statement(start, end, key):
 			})
 
 		monthly_statement["total_gross"] += invoice.total
-		monthly_statement["total_taxes"] += tax_sum
+		monthly_statement["total_reported_taxes"] += tax_sum
 		monthly_statement["total_discounts"] += discount_sum
 
-
-	# chceck paid invoices only
-
-	# unpaid_inv_sum = 0
-
-	# for invoice in monthly_statement["all_invoices"]: 
-	# 	if invoice["status"] != "paid": 
-	# 		print(f"Obs! Not all invoices listed have status paid: investigate")
-	# 		print(f"ID:{invoice["id"]} -> Status: {invoice["status"]}, Date: {invoice["date"]}")
-	# 		unpaid_inv_sum += invoice["gross_amount"]
-
-	# print(f"Total unpaid invoices amount to {to_printable_sek(unpaid_inv_sum)}")
-
-# MÅSTE dra bort ej betalade fakturor från summan, och räkna skatt därefter
 
 	#Fetch refunds
 	raw_refund_data = list(
@@ -195,21 +183,21 @@ def fetch_monhtly_statement(start, end, key):
 	#Check and correct VAT
 
 
-def check_vat(monthly_statement):
-	if 5 * monthly_statement["total_taxes"] == monthly_statement["sales_after_refunds_and_discounts"]:
+def check_vat(month):
+	if 5 * month["total_reported_taxes"] == month["sales_after_refunds_and_discounts"]:
 		print("---------------------")
 		print("tax is correct at 20%")
 	else:
-		tax_ratio = monthly_statement["total_taxes"] / monthly_statement["sales_after_refunds_and_discounts"]
+		tax_ratio = month["total_reported_taxes"] / month["sales_after_refunds_and_discounts"]
 		print("---------------------")
-		print(f"Current tax ratio is {tax_ratio}, total tax: {monthly_statement["total_taxes"]} of sales (af r & d) {monthly_statement["sales_after_refunds_and_discounts"]}")
-		updated_tax = monthly_statement["sales_after_refunds_and_discounts"] / 5
-		print(f"Updated tax: {monthly_statement["total_taxes"]} -> {updated_tax}")
-		print(f"Now at a ration of {updated_tax / monthly_statement["sales_after_refunds_and_discounts"]}")
-		monthly_statement["total_taxes"] = updated_tax
+		print(f"Current tax ratio is {tax_ratio}, total tax: {month["total_reported_taxes"]} of sales (af r & d) {month["sales_after_refunds_and_discounts"]}")
+		month["total_corrected_taxes"] = month["sales_after_refunds_and_discounts"] // 5 # // discard remainder
+		month["tax_adjustment"] = month["total_corrected_taxes"] - month["total_reported_taxes"]
+		print(f"Updated tax: {to_printable_sek(month["total_reported_taxes"])} -> {to_printable_sek(month["total_corrected_taxes"])}")
+		print(f"Now at a ratio of {month["total_corrected_taxes"] / month["sales_after_refunds_and_discounts"]}")
 
 
-def fetch_stripe_monthly_fees(start, end, key):
+def fetch_stripe_monthly_fees(start, end):
 	report_run = client.v1.reporting.report_runs.create({
 		"report_type": "all_fees.balance_transaction_created.summary.2",
 		"parameters": {
@@ -240,18 +228,15 @@ def fetch_stripe_monthly_fees(start, end, key):
 
 	for row in rows:
 		monthly_fee_statement[row["product"]] += int(Decimal(row["amount"]) * 100)
-		monthly_fee_statement["total_fees"] += int(Decimal(row["amount"]) * 100) # ska sedan avrundas till jämt 50 öre
+		# monthly_fee_statement["total_fees"] += int(Decimal(row["amount"]) * 100) # ska sedan avrundas till jämt 50 öre
 
+	monthly_fee_statement["total_fees"] = sum(monthly_fee_statement.values())
 	return monthly_fee_statement
-
 
 # Calculate what to deposit from Stripe to company account
 def to_deposit(monthly_statement, monthly_fee_statement):
 	return monthly_statement["sales_after_refunds_and_discounts"] - monthly_fee_statement["total_fees"]
 
-
-
-# Stuff for generating pdfs
 
 # Stuff for generating pdfs
 def _page_footer(canvas, doc):
@@ -304,7 +289,9 @@ def build_statement(path, title, statement):
 	# --- Summary block ---
 	summary_rows = [
 		["Totalt brutto", to_printable_sek(statement["total_gross"])],
-		["Total moms", to_printable_sek(statement["total_taxes"])],
+		["Total automatiskt uträknad moms", to_printable_sek(statement["total_reported_taxes"])],
+		["Total moms", to_printable_sek(statement["total_corrected_taxes"])],
+		["Justerad moms", to_printable_sek(statement["tax_adjustment"])],
 		["Totala rabatter", to_printable_sek(statement["total_discounts"])],
 		["Total återbetalningar", to_printable_sek(statement["total_refunds"])],
 		["Försäljning efter återbetalningar och rabatter",
@@ -390,9 +377,7 @@ def build_fee_statement(path, title, fee_statement):
 	]
 	doc.build(elements, onFirstPage=_page_footer, onLaterPages=_page_footer)
 
-### kör programmet:
-
-
+# kör programmet
 
 def main(): 
 	if len(sys.argv) < 3:
@@ -401,8 +386,9 @@ def main():
 		sys.exit(1)
 
 	# start = datetime(2026, 5, 1, 0, 0, tzinfo=tz)
-	# end = datetime(2026,6, 1, 0, 0, tzinfo=tz)
+	# end = datetime(2026,6, 1, 0, 0, tzinfo=tz) includes all of may, but none of june
 	#2026-05-01 00:00:00+02:00
+
 	try:
 		start = datetime.strptime(sys.argv[1].lstrip("-"), "%Y-%m-%d").replace(tzinfo=tz)
 	except Exception as e:
@@ -419,11 +405,11 @@ def main():
 
 
 	try:
-		monthly_statement = fetch_monhtly_statement(start, end, stripe_key)	
+		monthly_statement = fetch_monhtly_statement(start, end)	
 	except Exception as e: 
 		print(f"Error fetching monthly statement, {e}")
 
-	monthly_fees = fetch_stripe_monthly_fees(start, end, stripe_key)
+	monthly_fees = fetch_stripe_monthly_fees(start, end)
 
 	check_vat(monthly_statement)
 
@@ -459,5 +445,4 @@ def main():
 if __name__ == "__main__":
     main()
 
-# export stripe fees as pdf
 
