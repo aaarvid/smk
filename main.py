@@ -92,6 +92,25 @@ def print_monthly_overview(monthly_statement, monthly_fee_statement=None, to_dep
 
 
 
+def invoice_country(invoice):
+	# Snapshot on the invoice itself, frozen at finalization
+	addr = getattr(invoice, "customer_address", None)
+	if addr:
+		country = getattr(addr, "country", None)
+		if country:
+			return country
+
+	# Fall back to the live customer object
+	cust = getattr(invoice, "customer", None)
+	if cust and not isinstance(cust, str):
+		a = getattr(cust, "address", None)
+		if a:
+			country = getattr(a, "country", None)
+			if country:
+				return country
+
+	return None
+
 def fetch_monhtly_statement(start, end):
 
 	monthly_statement = {
@@ -115,6 +134,7 @@ def fetch_monhtly_statement(start, end):
 				"gte": int(start.timestamp()), 
 				"lt": int(end.timestamp()),
 			},
+			"expand": ["data.customer"],
 		}).auto_paging_iter() 
 	)
 
@@ -136,7 +156,8 @@ def fetch_monhtly_statement(start, end):
 				"status": invoice.status,
 				"gross_amount": invoice.total, #discounts redan bortdragna
 				"discount_amount": discount_sum,
-				"tax": tax_sum
+				"tax": tax_sum,
+				"country": invoice_country(invoice)
 				})
 
 			continue
@@ -148,7 +169,8 @@ def fetch_monhtly_statement(start, end):
 			"status": invoice.status,
 			"gross_amount": invoice.total, #discounts redan bortdragna
 			"discount_amount": discount_sum,
-			"tax": tax_sum
+			"tax": tax_sum, 
+			"country": invoice_country(invoice)
 			})
 
 		monthly_statement["total_gross"] += invoice.total
@@ -239,7 +261,11 @@ def to_deposit(monthly_statement, monthly_fee_statement):
 	return monthly_statement["sales_after_refunds_and_discounts"] - monthly_fee_statement["total_fees"]
 
 
-# Stuff for generating pdfs
+#######################################################
+#######################################################
+########### Stuff for generating pdfs##################
+#######################################################
+#######################################################
 def _page_footer(canvas, doc):
 	canvas.saveState()
 	canvas.setFont("Helvetica", 8)
@@ -314,11 +340,12 @@ def build_statement(path, filename, date_str, statement):
 	]))
 
 	# --- Invoice rows: match the keys produced by fetch_monhtly_statement ---
-	inv_headers = ["Id", "Datum", "Status", "Brutto", "Rabatt", "Moms"]
+	inv_headers = ["Id", "Datum", "Status", "Land", "Brutto", "Rabatt", "Moms"]
 	inv_rows = [[
 		inv.get("id", ""),
 		datetime.fromtimestamp(inv.get("date", 0), tz).strftime("%Y-%m-%d %H:%M"),
 		inv.get("status", ""),
+		inv.get("country") or "—",
 		to_printable_sek(inv.get("gross_amount", 0)),
 		to_printable_sek(inv.get("discount_amount", 0)),
 		to_printable_sek(inv.get("tax", 0)),
@@ -416,7 +443,8 @@ def main():
 	try:
 		monthly_statement = fetch_monhtly_statement(start, end)	
 	except Exception as e: 
-		print(f"Error fetching monthly statement, {e}")
+		import traceback; traceback.print_exc()
+		sys.exit(1)
 
 	monthly_fees = fetch_stripe_monthly_fees(start, end)
 
@@ -454,6 +482,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+	main()
 
 
